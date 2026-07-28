@@ -12,35 +12,68 @@ use esp_hal::{
     time::{Duration, Instant},
 };
 
-struct Debouncer {
-    etat: bool,
-    compteur: u8,
+enum PressEvent {Short, Long, None}
+
+struct Button {
+    state: bool,
+    counter: u8,
+    start: Option<Instant>,
+    long_signaled: bool,
 }
 
-impl Debouncer {
-    const SEUIL: u8 = 5;
+impl Button {
+    const DEBOUNCE_THRESHOLD: u8 = 5;
+    const LONG_PRESS_MS: u64 = 800;
 
     fn new() -> Self {
-        Self { etat: false, compteur: 0 }
+        Self {
+            state: false,
+            counter: 0,
+            start: None,
+            long_signaled: false,
+        }
     }
 
-    /// Appelée toutes les ~2 ms. Retourne true au front descendant.
-    fn update(&mut self, appuye: bool) -> bool {
-        if appuye == self.etat {
-            self.compteur = 0;
-            return false;
+    fn update(&mut self, pressed: bool) -> PressEvent {
+        if pressed == self.state {
+            self.counter = 0;
+
+            if self.state {
+                if let Some(t0) = self.start {
+                    if !self.long_signaled && t0.elapsed() >= Duration::from_millis(Self::LONG_PRESS_MS) {
+                        self.long_signaled = true;
+                        return PressEvent::Long;
+                    }
+                }
+            } else {
+                self.start = None;
+                self.long_signaled = false;
+            }
+
+            return PressEvent::None;
         }
-        self.compteur += 1;
-        if self.compteur >= Self::SEUIL {
-            self.compteur = 0;
-            self.etat = appuye;
-            return appuye; // front d'appui uniquement
+
+        self.counter += 1;
+        if self.counter >= Self::DEBOUNCE_THRESHOLD {
+            self.counter = 0;
+            self.state = pressed;
+
+            if pressed {
+                self.start = Some(Instant::now());
+                self.long_signaled = false;
+                return PressEvent::Short;
+            }
+
+            self.start = None;
+            self.long_signaled = false;
+            return PressEvent::None;
         }
-        false
+
+        PressEvent::None
     }
 }
 
-fn attendre_ms(ms: u64) {
+fn wait_ms(ms: u64) {
     let start = Instant::now();
     while start.elapsed() < Duration::from_millis(ms) {}
 }
@@ -51,20 +84,38 @@ fn main() -> ! {
     let peripherals = esp_hal::init(config);
 
     let mut led = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
-    let bouton_a = Input::new(peripherals.GPIO3, InputConfig::default().with_pull(Pull::Up));
-    let bouton_b = Input::new(peripherals.GPIO17, InputConfig::default().with_pull(Pull::Up));
-    let mut debouncer_a = Debouncer::new();
-    let mut debouncer_b = Debouncer::new();
+    let a = Input::new(peripherals.GPIO3, InputConfig::default().with_pull(Pull::Up));
+    let b = Input::new(peripherals.GPIO17, InputConfig::default().with_pull(Pull::Up));
+    let mut button_a = Button::new();
+    let mut button_b = Button::new();
 
     loop {
-        if debouncer_a.update(bouton_a.is_low()) {
-            println!(">>> front A -> LED ON");
-            led.set_high();
+        match button_a.update(a.is_low()) {
+            PressEvent::Short => {
+                led.set_high();
+                wait_ms(200);
+                led.set_low();
+                println!(">>> short A -> LED ON");
+            }
+            PressEvent::Long => {
+                led.set_high();
+                println!(">>> long A -> LED ON");
+            }
+            PressEvent::None => (),
         }
-        if debouncer_b.update(bouton_b.is_low()) {
-            println!(">>> front B -> LED ON");
-            led.set_low();
+        match button_b.update(b.is_low()) {
+            PressEvent::Short => {
+                led.set_low();
+                wait_ms(200);
+                led.set_high();
+                println!(">>> short B -> LED OFF");
+            }
+            PressEvent::Long => {
+                led.set_low();
+                println!(">>> long B -> LED OFF");
+            }
+            PressEvent::None => (),
         }
-        attendre_ms(2);
+        wait_ms(2);
     }
 }
