@@ -5,19 +5,21 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 use esp_backtrace as _;
 use esp_println::println;
+use core::fmt::Write;
+use heapless;
 use embedded_hal::{digital::InputPin};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_graphics::{
     mono_font::{ascii::FONT_9X15, MonoTextStyle},
     pixelcolor::Rgb565,
     prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::Text,
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Line },
+    text::{Alignment, Text},
 };
 use mipidsi::{
     interface::SpiInterface,
     models::ST7735s,
-    options::{ColorOrder, Orientation},
+    options::{Orientation},
     Builder,
 };
 use esp_hal::{
@@ -110,6 +112,31 @@ impl InputPin for FakeButton {
     }
 }
 
+struct FakeDrawTarget {
+    nb: u32,
+}
+
+impl Dimensions for FakeDrawTarget {
+    fn bounding_box(&self) -> Rectangle {
+        Rectangle::new(Point::zero(), Size::new(128, 160))
+    }
+}
+
+impl DrawTarget for FakeDrawTarget {
+    type Color = Rgb565;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for _ in pixels {
+            self.nb += 1;
+        }
+        Ok(())
+    }
+}
+
 fn read_low_active<P>(pin: &mut P) -> bool 
 where
     P: InputPin,
@@ -117,9 +144,64 @@ where
     return pin.is_low().unwrap_or(false);
 }
 
+fn draw_status<D>(display: &mut D, counter_a: u32, counter_b: u32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let style_text = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
+
+    let mut buf_a: heapless::String<32> = heapless::String::new();
+    write!(buf_a, "A:{}", counter_a).unwrap();
+    let _ = Text::with_alignment(
+        &buf_a,
+        Point::new(32, 80),
+        style_text,
+        Alignment::Center
+    )
+    .draw(display);
+
+    let mut buf_b: heapless::String<32> = heapless::String::new();
+    write!(buf_b, "B:{}", counter_b).unwrap();
+    let _ = Text::with_alignment(
+        &buf_b,
+        Point::new(96, 80),
+        style_text,
+        Alignment::Center
+    )
+    .draw(display);
+
+    Ok(())
+}
+
 fn wait_ms(ms: u64) {
     let start = Instant::now();
     while start.elapsed() < Duration::from_millis(ms) {}
+}
+
+fn refresh_background(display: &mut impl DrawTarget<Color = Rgb565>) {
+    let _ = display.clear(Rgb565::BLACK);
+
+    let style_rect = PrimitiveStyleBuilder::new()
+    .stroke_color(Rgb565::RED)
+    .stroke_width(2)
+    .build();
+
+    let _ = Rectangle::new(Point::new(1, 1), Size::new(126, 158))
+        .into_styled(style_rect)
+        .draw(display);
+
+    let style_text = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
+    let _ = Text::with_alignment(
+        "RUSTEESH",
+        Point::new(64, 15), // Position at X = center of screen, Y = top offset (e.g., Y = 10)
+        style_text,
+        Alignment::Center,
+    )
+    .draw(display);
+
+    let _ = Line::new(Point::new(64, 25), Point::new(64, 145))
+        .into_styled(style_rect)
+        .draw(display);
 }
 
 #[main]
@@ -137,6 +219,10 @@ fn main() -> ! {
 
     let mut test_button = FakeButton { pushed: true };
     assert!(read_low_active(&mut test_button));
+    let mut test_display = FakeDrawTarget { nb: 0 };
+    draw_status(&mut test_display, 42, 24).unwrap();
+    println!("pixels drawn: {}", test_display.nb);
+
 
     // Define SPI configuration
     let dc = Output::new(peripherals.GPIO8, Level::Low, OutputConfig::default());
@@ -165,14 +251,12 @@ fn main() -> ! {
         .init(&mut delay)
         .unwrap();
 
-    display.clear(Rgb565::BLACK).unwrap();
+    refresh_background(&mut display);
 
-    let style = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
-    Text::new("Hello World!", Point::new(10, 30), style)
-        .draw(&mut display)
-        .unwrap();
-
-
+    let mut counter_a = 0; 
+    let mut counter_b = 0;
+    let _ = draw_status(&mut display, counter_a, counter_b);
+    
     loop {
         match button_a.update(a.is_low()) {
             PressEvent::Short => {
@@ -180,6 +264,12 @@ fn main() -> ! {
                 wait_ms(200);
                 led.set_low();
                 println!(">>> short A -> LED ON");
+                counter_a += 1;
+                let _ = Rectangle::new(Point::new(10, 60), Size::new(40, 50))
+                    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
+                    .draw(&mut display)
+                    .unwrap();
+                let _ = draw_status(&mut display, counter_a, counter_b);
             }
             PressEvent::Long => {
                 led.set_high();
@@ -193,6 +283,12 @@ fn main() -> ! {
                 wait_ms(200);
                 led.set_high();
                 println!(">>> short B -> LED OFF");
+                counter_b += 1;
+                let _ = Rectangle::new(Point::new(70, 60), Size::new(40, 50))
+                    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
+                    .draw(&mut display)
+                    .unwrap();
+                let _ = draw_status(&mut display, counter_a, counter_b);
             }
             PressEvent::Long => {
                 led.set_low();
