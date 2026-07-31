@@ -36,7 +36,6 @@ use esp_hal::{
 
 use rusteesh::board::Board;
 use rusteesh::input::{Debouncer, PressEvent};
-use rusteesh::selftest;
 use rusteesh::ui::{draw_status, refresh_background};
 
 /// Busy wait. Blocks the core for the whole duration: nothing else is polled
@@ -55,8 +54,6 @@ fn now_ms(boot: Instant) -> u64 {
 #[main]
 fn main() -> ! {
     let mut board = Board::init();
-
-    selftest::run();
 
     let mut button_a = Debouncer::new();
     let mut button_b = Debouncer::new();

@@ -64,7 +64,6 @@ src/
 ├── board.rs      ← THE hardware module: GPIO, SPI, display bring-up
 ├── input/        ← button logic (bool + u64, nothing else)
 ├── ui/           ← rendering, generic over DrawTarget
-├── selftest.rs   ← smoke check run at boot
 └── bin/main.rs   ← event loop
 ```
 
@@ -73,7 +72,6 @@ src/
 | `board` | yes — that is its job | no |
 | `input` | no | yes |
 | `ui` | no | yes |
-| `selftest` | yes (`esp-println`) | no, runs on the board |
 
 ### The two dependency inversions
 
@@ -84,8 +82,9 @@ Two places where the hardware would naturally have leaked into the logic:
 instantly instead of really waiting. Only `main` calls `Instant::now()`.
 
 **The display.** `ui::` is generic over `DrawTarget<Color = Rgb565>`. The same
-function accepts the real screen or the `FakeDrawTarget` stub, which just counts
-the pixels it receives.
+function drives the real screen on the board and a `SimulatorDisplay` under
+`cargo test-host`, so the tests can inspect actual pixels — colours and
+positions included.
 
 Without those two, `cargo test-host` would be impossible: `input` and `ui` would
 drag in a dependency on `esp-hal`, which does not build for x86.

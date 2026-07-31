@@ -11,10 +11,9 @@
 //! | `board`  | yes — that is its job | no |
 //! | [`input`]  | no | yes |
 //! | [`ui`]     | no | yes |
-//! | `selftest` | yes (`esp-println`) | no, runs on the board |
 //!
-//! (`board` and `selftest` do not appear in this documentation when it is
-//! generated without the `hw` feature.)
+//! (`board` does not appear in this documentation when it is generated without
+//! the `hw` feature.)
 //!
 //! That split is what makes `cargo test-host` possible: with the `hw` feature
 //! off, the `esp-*` crates are not compiled at all, and `input` / `ui` build
@@ -29,7 +28,7 @@
 //!   it (`update(pressed, now_ms)`). A test can therefore simulate an 800 ms
 //!   press instantly. Only `main` reads real time.
 //! * **The display.** [`ui`] is generic over `DrawTarget<Color = Rgb565>`, so it
-//!   accepts the real screen and [`ui::FakeDrawTarget`] alike.
+//!   drives the real screen and a `SimulatorDisplay` alike.
 //!
 //! # Commands
 //!
@@ -50,8 +49,6 @@
 pub mod input;
 pub mod ui;
 
-// Board-only modules.
+// Board-only module.
 #[cfg(feature = "hw")]
 pub mod board;
-#[cfg(feature = "hw")]
-pub mod selftest;

@@ -1,8 +1,8 @@
 //! Rendering of the button counters.
 //!
 //! Nothing here knows about the ST7735s: everything goes through `DrawTarget`,
-//! which is what makes these functions testable on a PC with
-//! [`FakeDrawTarget`].
+//! which is what lets the tests below run these very functions against a
+//! `SimulatorDisplay` on a PC.
 
 use core::fmt::Write;
 
@@ -89,57 +89,72 @@ pub fn refresh_background(display: &mut impl DrawTarget<Color = Rgb565>) {
         .draw(display);
 }
 
-/// Stub display: draws nothing, only counts the pixels it receives. Lets the
-/// rendering be checked without hardware, on a PC as well as on the board.
-///
-/// The pixel count is a coarse but sufficient measure: it establishes that a
-/// function drew *something*, and allows two renders to be compared against each
-/// other (a six-digit counter must produce more pixels than a one-digit one). It
-/// obviously checks neither positions nor colours.
-///
-/// The `bounding_box` mirrors the real screen dimensions (128×160) so that the
-/// clipping performed by `embedded-graphics` is identical.
-pub struct FakeDrawTarget {
-    pub nb: u32,
-}
-
-impl FakeDrawTarget {
-    pub fn new() -> Self {
-        Self { nb: 0 }
-    }
-}
-
-impl Default for FakeDrawTarget {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Dimensions for FakeDrawTarget {
-    fn bounding_box(&self) -> Rectangle {
-        Rectangle::new(Point::zero(), Size::new(128, 160))
-    }
-}
-
-impl DrawTarget for FakeDrawTarget {
-    type Color = Rgb565;
-    type Error = core::convert::Infallible;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        for _ in pixels {
-            self.nb += 1;
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use embedded_graphics::primitives::PrimitiveStyle;
     use embedded_graphics_simulator::SimulatorDisplay;
+
+    /// Stub display: draws nothing, only counts the pixels it receives.
+    ///
+    /// The pixel count is a coarse measure: it establishes that a function drew
+    /// *something*, and allows two renders to be compared against each other (a
+    /// six-digit counter must produce more pixels than a one-digit one). It
+    /// checks neither positions nor colours — that is what `SimulatorDisplay`
+    /// is used for below.
+    ///
+    /// The `bounding_box` mirrors the real panel (128×160) so that the clipping
+    /// performed by `embedded-graphics` is identical.
+    struct FakeDrawTarget {
+        nb: u32,
+    }
+
+    impl FakeDrawTarget {
+        fn new() -> Self {
+            Self { nb: 0 }
+        }
+    }
+
+    impl Dimensions for FakeDrawTarget {
+        fn bounding_box(&self) -> Rectangle {
+            Rectangle::new(Point::zero(), Size::new(W, H))
+        }
+    }
+
+    impl DrawTarget for FakeDrawTarget {
+        type Color = Rgb565;
+        type Error = core::convert::Infallible;
+
+        fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = Pixel<Self::Color>>,
+        {
+            for _ in pixels {
+                self.nb += 1;
+            }
+            Ok(())
+        }
+    }
+
+    // Same dimensions as the real panel (see `board::SCREEN_W` / `SCREEN_H`),
+    // otherwise the position assertions below would be meaningless.
+    const W: u32 = 128;
+    const H: u32 = 160;
+
+    fn sim() -> SimulatorDisplay<Rgb565> {
+        SimulatorDisplay::new(Size::new(W, H))
+    }
+
+    /// Is any pixel of `color` present in the `x` / `y` ranges (end-exclusive)?
+    fn any_pixel(
+        d: &SimulatorDisplay<Rgb565>,
+        xs: core::ops::Range<i32>,
+        ys: core::ops::Range<i32>,
+        color: Rgb565,
+    ) -> bool {
+        ys.flat_map(|y| xs.clone().map(move |x| Point::new(x, y)))
+            .any(|p| d.get_pixel(p) == color)
+    }
 
     #[test]
     fn draw_status_produces_pixels() {
@@ -176,17 +191,63 @@ mod tests {
 
     #[test]
     fn draw_status_does_not_panic() {
-        let mut display: SimulatorDisplay<Rgb565> = SimulatorDisplay::new(Size::new(160, 128));
+        let mut display = sim();
         assert!(draw_status(&mut display, 42, 24).is_ok());
     }
 
     #[test]
-    fn background_is_black_when_draw() {
-        let mut display: SimulatorDisplay<Rgb565> = SimulatorDisplay::new(Size::new(160, 128));
+    fn draw_status_leaves_the_rest_of_the_screen_alone() {
+        let mut display = sim();
         draw_status(&mut display, 42, 24).unwrap();
 
-        // a pixel need must be not changed by draw_status
-        let pixel = display.get_pixel(Point::new(5, 5));
-        assert_eq!(pixel, Rgb565::BLACK);
+        // Documented contract: draw_status erases nothing, so a pixel far from
+        // the counters must stay untouched.
+        assert_eq!(display.get_pixel(Point::new(5, 5)), Rgb565::BLACK);
+    }
+
+    // --- Below: what FakeDrawTarget cannot check — colours and positions ---
+
+    #[test]
+    fn counter_a_lands_left_and_b_lands_right() {
+        let mut display = sim();
+        draw_status(&mut display, 1, 2).unwrap();
+
+        // The text sits on the y = 80 baseline; look a little above it.
+        let band = 66..82;
+        let midline = (W / 2) as i32;
+
+        assert!(
+            any_pixel(&display, 0..midline, band.clone(), Rgb565::WHITE),
+            "counter A should be drawn in the left half"
+        );
+        assert!(
+            any_pixel(&display, midline..W as i32, band, Rgb565::WHITE),
+            "counter B should be drawn in the right half"
+        );
+    }
+
+    #[test]
+    fn refresh_background_paints_a_red_frame() {
+        let mut display = sim();
+        refresh_background(&mut display);
+
+        // Top and bottom edges of the frame.
+        assert!(any_pixel(&display, 0..W as i32, 0..4, Rgb565::RED));
+        assert!(any_pixel(&display, 0..W as i32, H as i32 - 4..H as i32, Rgb565::RED));
+    }
+
+    #[test]
+    fn refresh_background_clears_to_black_first() {
+        let mut display = sim();
+
+        // Dirty a pixel inside the frame, away from anything drawn.
+        Rectangle::new(Point::new(20, 120), Size::new(4, 4))
+            .into_styled(PrimitiveStyle::with_fill(Rgb565::GREEN))
+            .draw(&mut display)
+            .unwrap();
+        assert_eq!(display.get_pixel(Point::new(21, 121)), Rgb565::GREEN);
+
+        refresh_background(&mut display);
+        assert_eq!(display.get_pixel(Point::new(21, 121)), Rgb565::BLACK);
     }
 }

@@ -144,27 +144,6 @@ impl Default for Debouncer {
     }
 }
 
-/// Stub `InputPin`, used to exercise active-low reads without hardware.
-///
-/// Unrelated to [`Debouncer`]: it stands in for the *pin*, not for the
-/// debouncing logic. Its only user is [`read_low_active`].
-pub struct FakePin {
-    pub pushed: bool,
-}
-
-impl embedded_hal::digital::ErrorType for FakePin {
-    type Error = core::convert::Infallible;
-}
-
-impl InputPin for FakePin {
-    fn is_high(&mut self) -> Result<bool, Self::Error> {
-        Ok(!self.pushed)
-    }
-    fn is_low(&mut self) -> Result<bool, Self::Error> {
-        Ok(self.pushed)
-    }
-}
-
 /// Reads an **active-low** input: button wired to ground with an internal
 /// pull-up. `true` therefore means "pressed".
 ///
@@ -180,6 +159,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stub `InputPin` held at a fixed level.
+    ///
+    /// Unrelated to [`Debouncer`]: it stands in for the *pin*, not for the
+    /// debouncing logic. See `BouncyPin` below for a more faithful one.
+    struct FakePin {
+        pushed: bool,
+    }
+
+    impl embedded_hal::digital::ErrorType for FakePin {
+        type Error = core::convert::Infallible;
+    }
+
+    impl InputPin for FakePin {
+        fn is_high(&mut self) -> Result<bool, Self::Error> {
+            Ok(!self.pushed)
+        }
+        fn is_low(&mut self) -> Result<bool, Self::Error> {
+            Ok(self.pushed)
+        }
+    }
 
     /// Runs `n` calls in a row and returns only the last event.
     fn feed(b: &mut Debouncer, pressed: bool, n: usize, now_ms: u64) -> PressEvent {
@@ -242,10 +242,135 @@ mod tests {
     }
 
     #[test]
+    fn time_going_backwards_does_not_panic() {
+        let mut b = Debouncer::new();
+        feed(&mut b, true, 5, 1_000);
+
+        // `saturating_sub` guards the subtraction: an out-of-order clock must
+        // not underflow, and must not fire a long press either.
+        assert!(matches!(b.update(true, 500), PressEvent::None));
+
+        // Once time moves forward again, the long press still works.
+        assert!(matches!(b.update(true, 1_800), PressEvent::Long));
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let mut a = Debouncer::default();
+        let mut b = Debouncer::new();
+        assert!(matches!(feed(&mut a, true, 5, 0), PressEvent::Short));
+        assert!(matches!(feed(&mut b, true, 5, 0), PressEvent::Short));
+    }
+
+    // --- FakePin ------------------------------------------------------------
+
+    #[test]
     fn fake_pin_is_low_active() {
         let mut pin = FakePin { pushed: true };
         assert!(read_low_active(&mut pin));
         pin.pushed = false;
         assert!(!read_low_active(&mut pin));
+    }
+
+    #[test]
+    fn fake_pin_levels_are_consistent() {
+        // An active-low pin reads low when pushed and high when idle; the two
+        // accessors must never agree.
+        let mut pin = FakePin { pushed: true };
+        assert!(pin.is_low().unwrap());
+        assert!(!pin.is_high().unwrap());
+
+        pin.pushed = false;
+        assert!(!pin.is_low().unwrap());
+        assert!(pin.is_high().unwrap());
+    }
+
+    // --- Full chain: pin -> read_low_active -> Debouncer ---------------------
+
+    /// A pin replaying a recorded sequence of physical states, bounces
+    /// included. Closer to a real contact than [`FakePin`], the same way
+    /// `SimulatorDisplay` is closer to a real screen than `FakeDrawTarget`.
+    ///
+    /// Each entry is one sample; `true` means the contact is closed.
+    struct BouncyPin<'a> {
+        samples: &'a [bool],
+        idx: usize,
+    }
+
+    impl embedded_hal::digital::ErrorType for BouncyPin<'_> {
+        type Error = core::convert::Infallible;
+    }
+
+    impl InputPin for BouncyPin<'_> {
+        fn is_low(&mut self) -> Result<bool, Self::Error> {
+            let level = self.samples.get(self.idx).copied().unwrap_or(false);
+            self.idx += 1;
+            Ok(level)
+        }
+        fn is_high(&mut self) -> Result<bool, Self::Error> {
+            self.is_low().map(|low| !low)
+        }
+    }
+
+    /// Replays every sample through the whole chain at 2 ms per iteration, the
+    /// period `main` actually uses, and tallies the events.
+    fn replay(samples: &[bool]) -> (usize, usize) {
+        let mut pin = BouncyPin { samples, idx: 0 };
+        let mut b = Debouncer::new();
+        let (mut shorts, mut longs) = (0, 0);
+
+        for i in 0..samples.len() {
+            let pressed = read_low_active(&mut pin);
+            match b.update(pressed, i as u64 * 2) {
+                PressEvent::Short => shorts += 1,
+                PressEvent::Long => longs += 1,
+                PressEvent::None => {}
+            }
+        }
+
+        (shorts, longs)
+    }
+
+    #[test]
+    fn a_bouncing_contact_yields_exactly_one_press() {
+        let mut samples = [false; 70];
+        // Contact bounces for six samples before settling.
+        samples[10] = true;
+        samples[12] = true;
+        samples[14] = true;
+        // Then held steadily for 30 samples (60 ms — well under the long press).
+        for s in samples.iter_mut().skip(16).take(30) {
+            *s = true;
+        }
+        // Release bounces too.
+        samples[47] = true;
+        samples[49] = true;
+
+        let (shorts, longs) = replay(&samples);
+        assert_eq!(shorts, 1, "bounces must not produce extra presses");
+        assert_eq!(longs, 0, "60 ms is far too short for a long press");
+    }
+
+    #[test]
+    fn a_held_contact_yields_one_press_and_one_long_press() {
+        // 500 samples at 2 ms = 1 s of hold, past the 800 ms threshold.
+        let samples = [true; 500];
+
+        let (shorts, longs) = replay(&samples);
+        assert_eq!(shorts, 1);
+        assert_eq!(longs, 1, "the long press must fire exactly once");
+    }
+
+    #[test]
+    fn a_glitch_too_short_to_confirm_is_ignored() {
+        // Four samples of contact — one below the threshold — then nothing.
+        let mut samples = [false; 40];
+        for s in samples.iter_mut().skip(10).take(4) {
+            *s = true;
+        }
+
+        let (shorts, longs) = replay(&samples);
+        assert_eq!(shorts, 0, "an 8 ms glitch is electrical noise, not a press");
+        assert_eq!(longs, 0);
     }
 }

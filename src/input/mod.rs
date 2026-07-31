@@ -5,4 +5,4 @@
 //! tests run under `cargo test-host`.
 
 pub mod debouncer;
-pub use debouncer::{Debouncer, PressEvent, FakePin, read_low_active};
+pub use debouncer::{Debouncer, PressEvent, read_low_active};
