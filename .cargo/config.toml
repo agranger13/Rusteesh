@@ -1,16 +1,17 @@
 [target.riscv32imac-unknown-none-elf]
 runner = "espflash flash --monitor --chip esp32c6"
+# Required to obtain backtraces (e.g. when using the "esp-backtrace" crate.)
+# NOTE: May negatively impact performance of produced code
+# Scoped to the target: applied globally, this flag would also pollute the
+# host test build.
+rustflags = ["-C", "force-frame-pointers"]
 
 [env]
 
 [build]
-rustflags = [
-  # Required to obtain backtraces (e.g. when using the "esp-backtrace" crate.)
-  # NOTE: May negatively impact performance of produced code
-  "-C", "force-frame-pointers",
-]
-
 target = "riscv32imac-unknown-none-elf"
 
-[unstable]
-build-std = ["core"]
+[alias]
+# Unit tests on the PC: host target plus the `hw` feature off, so no esp-* crate
+# is compiled and the test harness (which needs std) works.
+test-host = "test --target x86_64-pc-windows-msvc --no-default-features"

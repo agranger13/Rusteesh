@@ -7,18 +7,39 @@ version      = "0.1.0"
 [[bin]]
 name = "rusteesh"
 path = "./src/bin/main.rs"
+# The binary only makes sense for the board: it is not built by
+# `cargo test-host`, which turns the `hw` feature off.
+required-features = ["hw"]
+
+[features]
+default = ["hw"]
+# Everything that touches the esp32c6 hardware. Off for PC tests.
+hw = [
+  "dep:esp-hal",
+  "dep:esp-backtrace",
+  "dep:esp-bootloader-esp-idf",
+  "dep:esp-println",
+  "dep:critical-section",
+]
 
 [dependencies]
-esp-hal = { version = "~1.1.0", features = ["esp32c6", "unstable"] }
-esp-backtrace = { version = "0.19.0", features = ["esp32c6", "panic-handler", "println"] }
-esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c6"] }
-critical-section = "1.2.0"
-esp-println = { version = "0.17.0", features = ["esp32c6"] }
+# --- Hardware: optional, only builds for the riscv32 target ---
+esp-hal = { version = "~1.1.0", features = ["esp32c6", "unstable"], optional = true }
+esp-backtrace = { version = "0.19.0", features = ["esp32c6", "panic-handler", "println"], optional = true }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c6"], optional = true }
+esp-println = { version = "0.17.0", features = ["esp32c6"], optional = true }
+critical-section = { version = "1.2.0", optional = true }
+
+# --- Portable: builds on the PC as well as on the board ---
 embedded-hal = "1.0.0"
 embedded-graphics = "0.8"
 mipidsi = "0.9"
 embedded-hal-bus = "0.3"
 heapless = "0.9"
+static_cell = "2.1"
+
+[dev-dependencies]
+embedded-graphics-simulator = "0.8"
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]
