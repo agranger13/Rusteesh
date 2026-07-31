@@ -7,12 +7,12 @@
 
 use esp_println::println;
 
-use crate::input::{read_low_active, Debouncer, FakeDebouncer, PressEvent};
+use crate::input::{read_low_active, Debouncer, FakePin, PressEvent};
 use crate::ui::{draw_status, FakeDrawTarget};
 
 pub fn run() {
-    let mut fake_btn = FakeDebouncer { pushed: true };
-    assert!(read_low_active(&mut fake_btn));
+    let mut fake_pin = FakePin { pushed: true };
+    assert!(read_low_active(&mut fake_pin));
 
     let mut button = Debouncer::new();
     for _ in 0..4 {

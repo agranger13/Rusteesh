@@ -144,16 +144,19 @@ impl Default for Debouncer {
     }
 }
 
-/// Stub input, used to exercise active-low reads without hardware.
-pub struct FakeDebouncer {
+/// Stub `InputPin`, used to exercise active-low reads without hardware.
+///
+/// Unrelated to [`Debouncer`]: it stands in for the *pin*, not for the
+/// debouncing logic. Its only user is [`read_low_active`].
+pub struct FakePin {
     pub pushed: bool,
 }
 
-impl embedded_hal::digital::ErrorType for FakeDebouncer {
+impl embedded_hal::digital::ErrorType for FakePin {
     type Error = core::convert::Infallible;
 }
 
-impl InputPin for FakeDebouncer {
+impl InputPin for FakePin {
     fn is_high(&mut self) -> Result<bool, Self::Error> {
         Ok(!self.pushed)
     }
@@ -239,8 +242,8 @@ mod tests {
     }
 
     #[test]
-    fn fake_button_is_low_active() {
-        let mut pin = FakeDebouncer { pushed: true };
+    fn fake_pin_is_low_active() {
+        let mut pin = FakePin { pushed: true };
         assert!(read_low_active(&mut pin));
         pin.pushed = false;
         assert!(!read_low_active(&mut pin));
