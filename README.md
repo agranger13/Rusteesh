@@ -10,6 +10,7 @@ ST7735s TFT display over SPI. Each press increments a counter shown on screen.
 | `cargo build` | Builds the firmware for the board |
 | `cargo run` | Builds, flashes and opens the serial monitor (`espflash`) |
 | `cargo test-host` | Runs the unit tests **on the PC** |
+| `cargo sim` | Renders the UI in a desktop window (SDL2), no board needed |
 | `cargo doc --open` | Generates and opens the documentation |
 
 ### Why `cargo test-host` and not `cargo test`
@@ -28,6 +29,23 @@ cargo test --target x86_64-pc-windows-msvc --no-default-features
 `--no-default-features` turns off the `hw` feature, so no `esp-*` crate is
 compiled — they only target RISC-V and would supply a `#[panic_handler]` that
 conflicts with the one from `std`.
+
+### The simulator and SDL2
+
+`cargo sim` opens an actual window through `embedded-graphics-simulator`, which
+links against SDL2 — a C library. Rather than installing it by hand, the `sdl2`
+dev-dependency carries the `bundled` and `static-link` features: SDL2 is built
+from source (cmake required) and folded into the binary, so there is no
+`SDL2.lib` to place and no `SDL2.dll` to ship.
+
+CMake 4 removed support for projects declaring `cmake_minimum_required` below
+3.5, which SDL2 still does. `.cargo/config.toml` sets
+`CMAKE_POLICY_VERSION_MINIMUM = "3.5"` to configure it anyway. Without it the
+build fails with *"Compatibility with CMake < 3.5 has been removed"*.
+
+The simulator deliberately lives in `examples/`, not in a `#[test]`: it blocks
+until the window is closed, so it would hang the test suite and fail on a
+headless machine.
 
 ### Phantom errors in the editor
 

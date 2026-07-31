@@ -40,6 +40,10 @@ static_cell = "2.1"
 
 [dev-dependencies]
 embedded-graphics-simulator = "0.8"
+# Not used directly: this pulls SDL2 in for embedded-graphics-simulator.
+# `bundled` builds SDL2 from source (needs cmake) and `static-link` folds it
+# into the binary, so there is no SDL2.lib to install nor SDL2.dll to ship.
+sdl2 = { version = "0.38", features = ["bundled", "static-link"] }
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]

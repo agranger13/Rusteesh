@@ -7,6 +7,10 @@ runner = "espflash flash --monitor --chip esp32c6"
 rustflags = ["-C", "force-frame-pointers"]
 
 [env]
+# SDL2 (pulled in by embedded-graphics-simulator) still declares
+# `cmake_minimum_required(VERSION 3.0)`, and CMake 4 dropped support for
+# anything below 3.5. This tells CMake to configure it anyway.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 
 [build]
 target = "riscv32imac-unknown-none-elf"
@@ -15,3 +19,6 @@ target = "riscv32imac-unknown-none-elf"
 # Unit tests on the PC: host target plus the `hw` feature off, so no esp-* crate
 # is compiled and the test harness (which needs std) works.
 test-host = "test --target x86_64-pc-windows-msvc --no-default-features"
+
+# Opens the UI in a desktop window (SDL2). Interactive: blocks until closed.
+sim = "run --example simulator --target x86_64-pc-windows-msvc --no-default-features"

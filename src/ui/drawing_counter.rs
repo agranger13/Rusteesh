@@ -139,6 +139,7 @@ impl DrawTarget for FakeDrawTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use embedded_graphics_simulator::SimulatorDisplay;
 
     #[test]
     fn draw_status_produces_pixels() {
@@ -171,5 +172,21 @@ mod tests {
         let mut d = FakeDrawTarget::new();
         refresh_background(&mut d);
         assert!(d.nb > 0);
+    }
+
+    #[test]
+    fn draw_status_does_not_panic() {
+        let mut display: SimulatorDisplay<Rgb565> = SimulatorDisplay::new(Size::new(160, 128));
+        assert!(draw_status(&mut display, 42, 24).is_ok());
+    }
+
+    #[test]
+    fn background_is_black_when_draw() {
+        let mut display: SimulatorDisplay<Rgb565> = SimulatorDisplay::new(Size::new(160, 128));
+        draw_status(&mut display, 42, 24).unwrap();
+
+        // a pixel need must be not changed by draw_status
+        let pixel = display.get_pixel(Point::new(5, 5));
+        assert_eq!(pixel, Rgb565::BLACK);
     }
 }
