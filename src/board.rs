@@ -24,7 +24,7 @@
 
 use embedded_hal_bus::spi::ExclusiveDevice;
 use static_cell::StaticCell;
-
+use esp_hal::{interrupt::software::{SoftwareInterrupt, SoftwareInterruptControl}, timer::timg::{Timer, TimerGroup}};
 use mipidsi::{
     interface::SpiInterface,
     models::ST7735s,
@@ -93,6 +93,10 @@ pub type Display = mipidsi::Display<
 /// and `board.display` at the same time, for instance), which the borrow
 /// checker accepts without complaint since they are distinct fields.
 pub struct Board {
+    /// Base de temps de l'ordonnanceur, à passer à `esp_rtos::start`.
+    pub timer: Timer<'static>,
+    /// Interruption logicielle 0, utilisée pour les changements de contexte.
+    pub sw_int0: SoftwareInterrupt<'static, 0>,
     /// On-board LED, GPIO15.
     pub led: Output<'static>,
     /// Button A, GPIO3. Active low: use `btn_a.is_low()`.
@@ -101,8 +105,6 @@ pub struct Board {
     pub btn_b: Input<'static>,
     /// 128×160 ST7735s display, ready for `embedded-graphics` primitives.
     pub display: Display,
-    /// Blocking delay provider, reusable by the caller.
-    pub delay: Delay,
 }
 
 impl Board {
@@ -122,6 +124,8 @@ impl Board {
     pub fn init() -> Self {
         let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
         let peripherals = esp_hal::init(config);
+        let timg0 = TimerGroup::new(peripherals.TIMG0);
+        let sw = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
 
         let mut delay = Delay::new();
 
@@ -161,6 +165,6 @@ impl Board {
             .init(&mut delay)
             .unwrap();
 
-        Self { led, btn_a, btn_b, display, delay }
+        Self { led, btn_a, btn_b, display, timer: timg0.timer0, sw_int0: sw.software_interrupt0 }
     }
 }

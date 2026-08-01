@@ -30,20 +30,16 @@ use embedded_graphics::{
     primitives::{PrimitiveStyle, Rectangle},
 };
 use esp_hal::{
-    main,
-    time::{Duration, Instant},
+    gpio::{Input, Output}, time::{Instant},
 };
 
-use rusteesh::board::Board;
+use rusteesh::board::{Board, Display};
 use rusteesh::input::{Debouncer, PressEvent};
 use rusteesh::ui::{draw_status, refresh_background};
 
-/// Busy wait. Blocks the core for the whole duration: nothing else is polled
-/// in the meantime.
-fn wait_ms(ms: u64) {
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_millis(ms) {}
-}
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use embassy_executor::Spawner;
+use embassy_time::{Duration, Timer};
 
 /// Monotonic clock in milliseconds, injected into `Debouncer::update`.
 /// The only place that reads hardware time, so `input::Debouncer` stays pure.
@@ -51,62 +47,91 @@ fn now_ms(boot: Instant) -> u64 {
     boot.elapsed().as_millis()
 }
 
-#[main]
-fn main() -> ! {
-    let mut board = Board::init();
+enum Event {
+    BoutonA,
+    BoutonB,
+}
 
-    let mut button_a = Debouncer::new();
-    let mut button_b = Debouncer::new();
+static EVENTS: Channel<CriticalSectionRawMutex, Event, 8> = Channel::new();
 
-    refresh_background(&mut board.display);
 
-    let mut counter_a: u32 = 0;
-    let mut counter_b: u32 = 0;
-    let _ = draw_status(&mut board.display, counter_a, counter_b);
+#[esp_rtos::main]
+async fn main(spawner: Spawner) {
+    let board = Board::init();
+    esp_rtos::start(board.timer, board.sw_int0);
+    spawner.spawn(button_task(board.btn_a, board.btn_b, board.led).unwrap());
+    spawner.spawn(display_task(board.display).unwrap());
+}
+
+
+#[embassy_executor::task]
+async fn button_task(a: Input<'static>, b: Input<'static>, mut led: Output<'static>) {
+    let mut button_a: Debouncer = Debouncer::new();
+    let mut button_b: Debouncer = Debouncer::new();
 
     let boot = Instant::now();
-
     loop {
         let t = now_ms(boot);
-
-        match button_a.update(board.btn_a.is_low(), t) {
+        match button_a.update(a.is_low(), t) {
             PressEvent::Short => {
-                board.led.set_high();
-                wait_ms(200);
-                board.led.set_low();
+                led.set_high();
+                Timer::after(Duration::from_millis(200)).await;
+                led.set_low();
+                EVENTS.send(Event::BoutonA).await;
                 println!(">>> short A -> LED ON");
-                counter_a += 1;
-                let _ = Rectangle::new(Point::new(10, 60), Size::new(40, 50))
-                    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
-                    .draw(&mut board.display);
-                let _ = draw_status(&mut board.display, counter_a, counter_b);
             }
             PressEvent::Long => {
-                board.led.set_high();
+                led.set_high();
                 println!(">>> long A -> LED ON");
             }
             PressEvent::None => (),
         }
 
-        match button_b.update(board.btn_b.is_low(), t) {
+        match button_b.update(b.is_low(), t) {
             PressEvent::Short => {
-                board.led.set_low();
-                wait_ms(200);
-                board.led.set_high();
+                led.set_low();
+                Timer::after(Duration::from_millis(200)).await;
+                led.set_high();
+                EVENTS.send(Event::BoutonB).await;
                 println!(">>> short B -> LED OFF");
-                counter_b += 1;
-                let _ = Rectangle::new(Point::new(70, 60), Size::new(40, 50))
-                    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
-                    .draw(&mut board.display);
-                let _ = draw_status(&mut board.display, counter_a, counter_b);
             }
             PressEvent::Long => {
-                board.led.set_low();
+                led.set_low();
                 println!(">>> long B -> LED OFF");
             }
             PressEvent::None => (),
         }
 
-        wait_ms(2);
+        Timer::after(Duration::from_millis(2)).await;
+    }
+}
+
+
+#[embassy_executor::task]
+async fn display_task(mut display: Display) {
+    let mut counter_a: u32 = 0;
+    let mut counter_b: u32 = 0;
+
+    refresh_background(&mut display);
+    let _ = draw_status(&mut display, counter_a, counter_b);
+
+    loop {
+        let event = EVENTS.receive().await;
+        match event {
+            Event::BoutonA => {
+                counter_a += 1;
+                let _ = Rectangle::new(Point::new(10, 60), Size::new(40, 50))
+                    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
+                    .draw(&mut display);
+                let _ = draw_status(&mut display, counter_a, counter_b);
+            }
+            Event::BoutonB => {
+                counter_b += 1;
+                let _ = Rectangle::new(Point::new(70, 60), Size::new(40, 50))
+                    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
+                    .draw(&mut display);
+                let _ = draw_status(&mut display, counter_a, counter_b);
+            }
+        }
     }
 }

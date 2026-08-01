@@ -361,13 +361,12 @@ mod tests {
         assert_eq!(longs, 1, "the long press must fire exactly once");
     }
 
+
     #[test]
     fn a_glitch_too_short_to_confirm_is_ignored() {
         // Four samples of contact — one below the threshold — then nothing.
         let mut samples = [false; 40];
-        for s in samples.iter_mut().skip(10).take(4) {
-            *s = true;
-        }
+        samples[10..14].fill(true);
 
         let (shorts, longs) = replay(&samples);
         assert_eq!(shorts, 0, "an 8 ms glitch is electrical noise, not a press");

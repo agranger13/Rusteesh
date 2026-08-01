@@ -20,6 +20,12 @@ hw = [
   "dep:esp-bootloader-esp-idf",
   "dep:esp-println",
   "dep:critical-section",
+  "dep:esp-rtos",
+  # Only used from `board` / `main`, which are hardware-only.
+  "dep:static_cell",
+  "dep:embassy-executor",
+  "dep:embassy-time",
+  "dep:embassy-sync",
 ]
 
 [dependencies]
@@ -33,10 +39,16 @@ critical-section = { version = "1.2.0", optional = true }
 # --- Portable: builds on the PC as well as on the board ---
 embedded-hal = "1.0.0"
 embedded-graphics = "0.8"
-mipidsi = "0.9"
+mipidsi = "0.10.0"
 embedded-hal-bus = "0.3"
 heapless = "0.9"
-static_cell = "2.1"
+
+# --- Runtime: hardware-only, see the `hw` feature ---
+static_cell = { version = "2.1", optional = true }
+embassy-executor = { version = "0.10.0", optional = true }
+embassy-time = { version = "0.5", optional = true }
+embassy-sync = { version = "0.8.0", optional = true }
+esp-rtos = { version = "0.3.0", features = ["esp32c6", "embassy"], optional = true }
 
 [dev-dependencies]
 embedded-graphics-simulator = "0.8"
