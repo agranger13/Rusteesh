@@ -52,20 +52,21 @@ enum Event {
     BoutonB,
 }
 
-static EVENTS: Channel<CriticalSectionRawMutex, Event, 8> = Channel::new();
+static EVENTS: Channel<CriticalSectionRawMutex, Event, 1> = Channel::new();
 
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     let board = Board::init();
     esp_rtos::start(board.timer, board.sw_int0);
-    spawner.spawn(button_task(board.btn_a, board.btn_b, board.led).unwrap());
+    spawner.spawn(button_task(board.btn_a, board.btn_b).unwrap());
     spawner.spawn(display_task(board.display).unwrap());
+    spawner.spawn(blink_task(board.led).unwrap());
 }
 
 
 #[embassy_executor::task]
-async fn button_task(a: Input<'static>, b: Input<'static>, mut led: Output<'static>) {
+async fn button_task(a: Input<'static>, b: Input<'static>) {
     let mut button_a: Debouncer = Debouncer::new();
     let mut button_b: Debouncer = Debouncer::new();
 
@@ -74,14 +75,10 @@ async fn button_task(a: Input<'static>, b: Input<'static>, mut led: Output<'stat
         let t = now_ms(boot);
         match button_a.update(a.is_low(), t) {
             PressEvent::Short => {
-                led.set_high();
-                Timer::after(Duration::from_millis(200)).await;
-                led.set_low();
                 EVENTS.send(Event::BoutonA).await;
                 println!(">>> short A -> LED ON");
             }
             PressEvent::Long => {
-                led.set_high();
                 println!(">>> long A -> LED ON");
             }
             PressEvent::None => (),
@@ -89,14 +86,10 @@ async fn button_task(a: Input<'static>, b: Input<'static>, mut led: Output<'stat
 
         match button_b.update(b.is_low(), t) {
             PressEvent::Short => {
-                led.set_low();
-                Timer::after(Duration::from_millis(200)).await;
-                led.set_high();
                 EVENTS.send(Event::BoutonB).await;
                 println!(">>> short B -> LED OFF");
             }
             PressEvent::Long => {
-                led.set_low();
                 println!(">>> long B -> LED OFF");
             }
             PressEvent::None => (),
@@ -133,5 +126,17 @@ async fn display_task(mut display: Display) {
                 let _ = draw_status(&mut display, counter_a, counter_b);
             }
         }
+
+        let start = Instant::now();
+        while start.elapsed() < esp_hal::time::Duration::from_millis(500) {}
+    }
+}
+
+#[embassy_executor::task]
+async fn blink_task (mut led: Output<'static>) {
+    led.set_low();
+    loop {
+        led.toggle();
+        Timer::after(Duration::from_millis(1000)).await;
     }
 }
