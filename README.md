@@ -126,3 +126,52 @@ function returns. `StaticCell` yields a `&'static mut` without `unsafe`.
 
 **The loop blocks for 200 ms** on LED blinks, during which the other button is
 not polled.
+
+
+# Info MeshCore
+Pin used :
+  -D ARDUINO_USB_CDC_ON_BOOT=1
+  -D ARDUINO_USB_MODE=1
+  -D P_LORA_TX_LED=15
+  -D P_LORA_SCLK=23
+  -D P_LORA_MISO=21
+  -D P_LORA_MOSI=22
+  -D P_LORA_NSS=4
+  -D P_LORA_DIO_1=7
+  -D P_LORA_BUSY=18
+  -D P_LORA_RESET=6
+  -D SX126X_RXEN=5
+
+Effective radio parameters (EU/UK Narrow preset), traced back to the MeshCore
+sources:
+
+| Parameter | Value | Source |
+|---|---|---|
+| Frequency | 869.618 MHz | `platformio.ini:28` |
+| Bandwidth (BW) | 62.5 kHz | `platformio.ini:29` |
+| Spreading factor (SF) | 8 | `platformio.ini:30` |
+| Coding rate (CR) | **8 → 4/8** (effective, as read in the app) | persisted prefs; compile-time default is 5 (`MyMesh.h:49`) |
+| Sync word | 0x12 (private) — 0x1424 in the SX1262 register | `CustomSX1262.h:45` |
+| Preamble length | 32 symbols | `RadioLibWrappers.h:47` |
+| TX power | 14 dBm | `firebeetle_c6` variant |
+| TCXO (DIO3) | 1.8 V | `firebeetle_c6` variant |
+
+Three traps when reimplementing this:
+
+- **Compile-time values are not authoritative.** `MyMesh.cpp:877` seeds `_prefs`
+  from the `LORA_*` defines once; after that the app pushes its own settings
+  through `CMD_SET_RADIO_PARAMS` (`MyMesh.cpp:1385`), which calls `savePrefs()`
+  then `radio_driver.setParams()`. Those prefs go to flash and are reloaded on
+  every boot. **The app shows what is actually on the air** — hence CR=8 even
+  though the firmware compiles with 5. Accepted ranges are `cr ∈ [5,8]`,
+  `sf ∈ [5,12]`, `bw ∈ [7.8, 500]`.
+
+- **The preamble is not the one passed to `begin()`.** `CustomSX1262.h:45`
+  passes 16, but `RadioLibWrapper::begin()` overwrites it right away with
+  `preambleLengthForSF(sf) = sf <= 8 ? 32 : 16` (`RadioLibWrappers.cpp:30`). With
+  SF=8 the effective value is therefore **32**. It is reapplied after every
+  transmission (`onSendFinished`).
+
+- **Sync word 0x12 is the SX127x notation.** The SX1262 encodes it over 16 bits
+  in its register, i.e. **0x1424**. That is the value to write when programming
+  the register directly.
