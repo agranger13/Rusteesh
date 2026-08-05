@@ -15,14 +15,28 @@
 //! | Display DC  | 8  | data/command |
 //! | Display RST | 14 | reset, idles high |
 //! | Display CS  | 1  | chip select, active low |
-//! | Display SCK | 23 | SPI2 clock |
-//! | Display MOSI| 22 | SPI2 data |
+//! | SPI2 SCK    | 23 | shared clock |
+//! | SPI2 MOSI   | 22 | shared, display + radio |
+//! | SPI2 MISO   | 21 | radio only, the ST7735s is write-only |
+//! | Radio NSS   | 4  | chip select, active low |
+//! | Radio RST   | 6  | reset, idles high |
+//! | Radio BUSY  | 18 | input, driven by the SX1262 |
+//! | Radio DIO1  | 7  | input, IRQ line |
+//! | Radio RXEN  | 5  | RF switch, high = receive |
+//!
+//! The display and the radio **share SPI2**. They are arbitrated by a mutex and
+//! told apart by their chip select; each gets its own clock frequency through
+//! `SpiDeviceWithConfig`.
 //!
 //! The GPIO numbers cannot be constants: `peripherals.GPIO3` is a *field*,
 //! consumed by move, not an index. They stay hard-coded inside [`Board::init`]
 //! — which is precisely why they are isolated here.
 
-use embedded_hal_bus::spi::ExclusiveDevice;
+use core::cell::RefCell;
+
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
+use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
+use lora_phy::{iv::GenericSx126xInterfaceVariant, sx126x, sx126x::{Sx126x, Sx1262, TcxoCtrlVoltage}};
 use static_cell::StaticCell;
 use esp_hal::{interrupt::software::{SoftwareInterrupt, SoftwareInterruptControl}, timer::timg::{Timer, TimerGroup}};
 use mipidsi::{
@@ -48,8 +62,22 @@ use esp_hal::{
 pub const SCREEN_W: u16 = 128;
 pub const SCREEN_H: u16 = 160;
 
-const SPI_FREQ_MHZ: u32 = 26;
+/// Display clock. The ST7735s is write-only and tolerates a fast bus.
+const SPI_FREQ_DISPLAY_MHZ: u32 = 26;
+/// Radio clock. The SX1262 datasheet caps SPI at 16 MHz; stay well under it.
+const SPI_FREQ_RADIO_MHZ: u32 = 4;
 const SPI_BUF_LEN: usize = 512;
+
+/// SPI2, shared by the display and the radio.
+///
+/// Both peripherals sit on SCK/MOSI (GPIO23/22) and only differ by their chip
+/// select, so the bus is behind a mutex and each user gets its own
+/// [`SpiDeviceWithConfig`] — which re-applies its own clock before every
+/// transaction. A plain `SpiDevice` would force both to share one frequency.
+static SPI_BUS: StaticCell<SharedBus> = StaticCell::new();
+
+type SharedBus = Mutex<CriticalSectionRawMutex, RefCell<Spi<'static, Blocking>>>;
+type SharedSpi = SpiDeviceWithConfig<'static, CriticalSectionRawMutex, Spi<'static, Blocking>, Output<'static>>;
 
 /// The concrete display type, with the whole SPI stack resolved.
 ///
@@ -76,14 +104,54 @@ const SPI_BUF_LEN: usize = 512;
 /// * `Board<D: DrawTarget<…>>` — compiles, but `init()` can only ever build one
 ///   `D`, so it would cost a viral generic parameter for nothing.
 pub type Display = mipidsi::Display<
-    SpiInterface<
-        'static,
-        ExclusiveDevice<Spi<'static, Blocking>, Output<'static>, Delay>,
-        Output<'static>,
-    >,
+    SpiInterface<'static, SharedSpi, Output<'static>>,
     ST7735s,
     Output<'static>,
 >;
+
+/// The radio, wired but **not yet woken up**.
+///
+/// `LoRa::new` is `async` (it resets the chip and waits on BUSY), so it cannot
+/// run in [`Board::init`]. The board therefore hands out the assembled
+/// `Sx126x` and the caller finishes the job from a task:
+///
+/// ```ignore
+/// let radio = LoRa::new(board.radio, false, embassy_time::Delay).await.unwrap();
+/// ```
+pub type Radio = Sx126x<
+    AsyncSpiDevice<SharedSpi>,
+    GenericSx126xInterfaceVariant<Output<'static>, Input<'static>>,
+    Sx1262,
+>;
+
+// --- Blocking → async SPI shim ----------------------------------------------
+
+/// Presents a blocking `SpiDevice` as an async one.
+///
+/// `lora-phy` demands [`embedded_hal_async::spi::SpiDevice`], but the bus is
+/// shared with `mipidsi`, which is blocking-only — so the bus itself has to be
+/// blocking, and this adapter bridges the gap by completing every transfer
+/// synchronously.
+///
+/// The cost is real but small: the executor is stalled for the duration of a
+/// transfer. SX1262 exchanges are a handful of bytes (a 255-byte FIFO read is
+/// the worst case), which at 4 MHz is well under a millisecond. The long waits
+/// — BUSY and DIO1 — stay genuinely async, since they go through `Wait` on the
+/// GPIOs rather than through SPI.
+pub struct AsyncSpiDevice<T>(pub T);
+
+impl<T: embedded_hal::spi::ErrorType> embedded_hal::spi::ErrorType for AsyncSpiDevice<T> {
+    type Error = T::Error;
+}
+
+impl<T: embedded_hal::spi::SpiDevice<u8>> embedded_hal_async::spi::SpiDevice<u8> for AsyncSpiDevice<T> {
+    async fn transaction(
+        &mut self,
+        operations: &mut [embedded_hal::spi::Operation<'_, u8>],
+    ) -> Result<(), Self::Error> {
+        embedded_hal::spi::SpiDevice::transaction(&mut self.0, operations)
+    }
+}
 
 // --- Board -------------------------------------------------------------------
 
@@ -105,6 +173,9 @@ pub struct Board {
     pub btn_b: Input<'static>,
     /// 128×160 ST7735s display, ready for `embedded-graphics` primitives.
     pub display: Display,
+    /// SX1262 radio, sharing SPI2 with the display. Still asleep — see
+    /// [`Radio`] for how to bring it up.
+    pub radio: Radio,
 }
 
 impl Board {
@@ -134,29 +205,43 @@ impl Board {
         let btn_a = Input::new(peripherals.GPIO3, InputConfig::default().with_pull(Pull::Up));
         let btn_b = Input::new(peripherals.GPIO17, InputConfig::default().with_pull(Pull::Up));
 
-        // --- ST7735s display on SPI2 ---
-        let dc = Output::new(peripherals.GPIO8, Level::Low, OutputConfig::default());
-        let rst = Output::new(peripherals.GPIO14, Level::High, OutputConfig::default());
-        let cs = Output::new(peripherals.GPIO1, Level::High, OutputConfig::default());
-
+        // --- SPI2, shared by the display and the radio ---
+        //
+        // MISO is only needed by the radio, but it belongs to the bus, so it is
+        // configured once here. The frequency set below is irrelevant: each
+        // `SpiDeviceWithConfig` overrides it before every transaction.
         let spi = Spi::new(
             peripherals.SPI2,
             SpiConfig::default()
-                .with_frequency(Rate::from_mhz(SPI_FREQ_MHZ))
+                .with_frequency(Rate::from_mhz(SPI_FREQ_DISPLAY_MHZ))
                 .with_mode(SpiMode::_0),
         )
         .unwrap()
         .with_sck(peripherals.GPIO23)
-        .with_mosi(peripherals.GPIO22);
+        .with_mosi(peripherals.GPIO22)
+        .with_miso(peripherals.GPIO21);
 
-        let spi_device = ExclusiveDevice::new(spi, cs, Delay::new()).unwrap();
+        let spi_bus = SPI_BUS.init(Mutex::new(RefCell::new(spi)));
+
+        // --- ST7735s display, CS on GPIO1 ---
+        let dc = Output::new(peripherals.GPIO8, Level::Low, OutputConfig::default());
+        let rst = Output::new(peripherals.GPIO14, Level::High, OutputConfig::default());
+        let cs = Output::new(peripherals.GPIO1, Level::High, OutputConfig::default());
+
+        let display_device = SpiDeviceWithConfig::new(
+            spi_bus,
+            cs,
+            SpiConfig::default()
+                .with_frequency(Rate::from_mhz(SPI_FREQ_DISPLAY_MHZ))
+                .with_mode(SpiMode::_0),
+        );
 
         // The buffer has to be 'static: it is referenced by the `Display` we
         // return, so it cannot live on the stack.
         static BUF: StaticCell<[u8; SPI_BUF_LEN]> = StaticCell::new();
         let buffer = BUF.init([0; SPI_BUF_LEN]);
 
-        let di = SpiInterface::new(spi_device, dc, buffer);
+        let di = SpiInterface::new(display_device, dc, buffer);
 
         let display = Builder::new(ST7735s, di)
             .display_size(SCREEN_W, SCREEN_H)
@@ -165,6 +250,42 @@ impl Board {
             .init(&mut delay)
             .unwrap();
 
-        Self { led, btn_a, btn_b, display, timer: timg0.timer0, sw_int0: sw.software_interrupt0 }
+        // --- SX1262 radio, CS on GPIO4 ---
+        //
+        // RESET idles high: the chip is only held in reset during the reset
+        // pulse, which `lora-phy` drives itself from `InterfaceVariant::reset`.
+        // BUSY and DIO1 are actively driven by the radio, so no pull is needed.
+        let nss = Output::new(peripherals.GPIO4, Level::High, OutputConfig::default());
+        let reset = Output::new(peripherals.GPIO6, Level::High, OutputConfig::default());
+        let busy = Input::new(peripherals.GPIO18, InputConfig::default());
+        let dio1 = Input::new(peripherals.GPIO7, InputConfig::default());
+        // RF switch, RX side only (`SX126X_RXEN` in the MeshCore config). The TX
+        // side is driven by the radio itself through DIO2, so lora-phy is given
+        // `None` for it. Without this pin the antenna is never routed to the
+        // receiver and the radio listens to nothing.
+        let rxen = Output::new(peripherals.GPIO5, Level::Low, OutputConfig::default());
+
+        let radio_device = AsyncSpiDevice(SpiDeviceWithConfig::new(
+            spi_bus,
+            nss,
+            SpiConfig::default()
+                .with_frequency(Rate::from_mhz(SPI_FREQ_RADIO_MHZ))
+                .with_mode(SpiMode::_0),
+        ));
+
+        let sx126x_config = sx126x::Config {
+            chip: Sx1262,
+            // 1.8 V, as documented for the `firebeetle_c6` variant in the
+            // README. An under-driven TCXO drifts, and at BW 62.5 kHz a few kHz
+            // of offset costs real sensitivity.
+            tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),
+            use_dcdc: false,
+            rx_boost: true,
+        };
+
+        let iv = GenericSx126xInterfaceVariant::new(reset, dio1, busy, Some(rxen), None).unwrap();
+        let radio = Sx126x::new(radio_device, iv, sx126x_config);
+
+        Self { led, btn_a, btn_b, display, radio, timer: timg0.timer0, sw_int0: sw.software_interrupt0 }
     }
 }

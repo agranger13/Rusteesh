@@ -6,4 +6,4 @@
 //! `cargo test-host`, from the very same code.
 
 pub mod drawing_counter;
-pub use drawing_counter::{draw_status, refresh_background};
+pub use drawing_counter::{draw_status, draw_paquets, refresh_background};

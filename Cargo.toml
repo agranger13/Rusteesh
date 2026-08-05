@@ -30,7 +30,7 @@ hw = [
 
 [dependencies]
 # --- Hardware: optional, only builds for the riscv32 target ---
-esp-hal = { version = "~1.1.0", features = ["esp32c6", "unstable"], optional = true }
+esp-hal = { version = "~1.1.2", features = ["esp32c6", "unstable"], optional = true }
 esp-backtrace = { version = "0.19.0", features = ["esp32c6", "panic-handler", "println"], optional = true }
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c6"], optional = true }
 esp-println = { version = "0.17.0", features = ["esp32c6"], optional = true }
@@ -38,10 +38,12 @@ critical-section = { version = "1.2.0", optional = true }
 
 # --- Portable: builds on the PC as well as on the board ---
 embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
 embedded-graphics = "0.8"
 mipidsi = "0.10.0"
-embedded-hal-bus = "0.3"
 heapless = "0.9"
+
+lora-phy = "3.0.1"
 
 # --- Runtime: hardware-only, see the `hw` feature ---
 static_cell = { version = "2.1", optional = true }
@@ -49,6 +51,7 @@ embassy-executor = { version = "0.10.0", optional = true }
 embassy-time = { version = "0.5", optional = true }
 embassy-sync = { version = "0.8.0", optional = true }
 esp-rtos = { version = "0.3.0", features = ["esp32c6", "embassy"], optional = true }
+embassy-embedded-hal = "0.6.0"
 
 [dev-dependencies]
 embedded-graphics-simulator = "0.8"

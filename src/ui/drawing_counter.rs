@@ -5,7 +5,6 @@
 //! `SimulatorDisplay` on a PC.
 
 use core::fmt::Write;
-
 use embedded_graphics::{
     mono_font::{ascii::FONT_9X15, MonoTextStyle},
     pixelcolor::Rgb565,
@@ -13,6 +12,7 @@ use embedded_graphics::{
     primitives::{PrimitiveStyleBuilder, Rectangle, Line},
     text::{Alignment, Text},
 };
+
 
 /// Draws both counters, `A` to the left and `B` to the right of the centre
 /// line, formatted as `A:<n>`.
@@ -54,6 +54,50 @@ where
         Alignment::Center
     )
     .draw(display);
+
+    Ok(())
+}
+
+/// How many bytes fit on one line: `"XX "` is 3 columns of `FONT_9X15`, so four
+/// bytes span 108 px of the 128 px panel.
+const BYTES_PER_ROW: usize = 4;
+/// Rows between the header and the bottom edge, at 15 px each.
+const MAX_ROWS: usize = 7;
+
+/// Dumps a received packet as hexadecimal, preceded by its length.
+///
+/// Hexadecimal rather than text on purpose: a LoRa payload is arbitrary bytes.
+/// MeshCore frames are binary — routing header, node ids, signature, ciphertext
+/// — so decoding them as UTF-8 fails on almost every packet.
+///
+/// Only the first `BYTES_PER_ROW * MAX_ROWS` bytes are shown; the panel cannot
+/// hold a full 255-byte packet. The length in the header is the real one, so a
+/// truncated display is still unambiguous.
+///
+/// Erases nothing — like [`draw_status`], the caller clears the area first.
+pub fn draw_paquets<D>(display: &mut D, message: &[u8]) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let style_text = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
+
+    let mut header: heapless::String<16> = heapless::String::new();
+    // `write!` into a heapless String can only fail on overflow, which the
+    // fixed capacities here rule out. Swallowed rather than unwrapped so a
+    // display glitch can never bring the firmware down.
+    let _ = write!(header, "len:{}", message.len());
+    let _ = Text::with_alignment(&header, Point::new(64, 20), style_text, Alignment::Center)
+        .draw(display);
+
+    for (row, chunk) in message.chunks(BYTES_PER_ROW).take(MAX_ROWS).enumerate() {
+        let mut line: heapless::String<16> = heapless::String::new();
+        for b in chunk {
+            let _ = write!(line, "{:02X} ", b);
+        }
+        let y = 40 + (row as i32) * 15;
+        let _ = Text::with_alignment(&line, Point::new(64, y), style_text, Alignment::Center)
+            .draw(display);
+    }
 
     Ok(())
 }
@@ -223,6 +267,52 @@ mod tests {
         assert!(
             any_pixel(&display, midline..W as i32, band, Rgb565::WHITE),
             "counter B should be drawn in the right half"
+        );
+    }
+
+    #[test]
+    fn draw_paquets_renders_binary_payloads() {
+        // The very payload that made the UTF-8 path fail on the board.
+        let mut d = FakeDrawTarget::new();
+        draw_paquets(&mut d, &[0x00, 0xFF, 0x9C, 0x12, 0x80]).unwrap();
+        assert!(d.nb > 0);
+    }
+
+    #[test]
+    fn draw_paquets_survives_an_empty_packet() {
+        // Only the "len:0" header is drawn, and no row loop runs.
+        let mut d = FakeDrawTarget::new();
+        assert!(draw_paquets(&mut d, &[]).is_ok());
+    }
+
+    #[test]
+    fn draw_paquets_truncates_instead_of_overflowing() {
+        // A full 255-byte packet cannot fit on the panel: the function must clip
+        // to MAX_ROWS rather than panic or run off the screen.
+        let mut short = FakeDrawTarget::new();
+        draw_paquets(&mut short, &[0xAB; BYTES_PER_ROW * MAX_ROWS]).unwrap();
+
+        let mut full = FakeDrawTarget::new();
+        draw_paquets(&mut full, &[0xAB; 255]).unwrap();
+
+        // Same rows drawn; only the "len:" header differs in width.
+        assert!(full.nb >= short.nb);
+    }
+
+    #[test]
+    fn draw_paquets_shows_the_real_length_even_when_truncated() {
+        let mut display = sim();
+        draw_paquets(&mut display, &[0xAB; 255]).unwrap();
+
+        // The header sits on the y = 20 baseline.
+        assert!(
+            any_pixel(&display, 0..W as i32, 6..22, Rgb565::WHITE),
+            "the length header should be drawn"
+        );
+        // Nothing may spill past the last row (baseline 40 + 6*15 = 130).
+        assert!(
+            !any_pixel(&display, 0..W as i32, 132..H as i32, Rgb565::WHITE),
+            "rows should stop at MAX_ROWS, not run off the panel"
         );
     }
 
