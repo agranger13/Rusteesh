@@ -20,7 +20,6 @@
 #![no_main]
 
 esp_bootloader_esp_idf::esp_app_desc!();
-
 use esp_backtrace as _;
 use esp_println::println;
 
@@ -38,6 +37,7 @@ use lora_phy::{LoRa, RxMode, mod_params::{Bandwidth, CodingRate, SpreadingFactor
 use rusteesh::board::{Board, Display};
 use rusteesh::input::{Debouncer, PressEvent};
 use rusteesh::ui::{draw_status, draw_paquets,refresh_background};
+use rusteesh::radio::messages::{MessageQueue, Message};
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_executor::Spawner;
@@ -52,10 +52,6 @@ fn now_ms(boot: Instant) -> u64 {
 enum Event {
     BoutonA,
     BoutonB,
-}
-
-enum Message {
-    Packet(Vec<u8, 255>),
 }
 
 static EVENTS: Channel<CriticalSectionRawMutex, Event, 8> = Channel::new();
@@ -144,9 +140,9 @@ async fn display_lora_task(mut display: Display) {
     loop {
         let event = PAQUETS.receive().await;
         match event {
-            Message::Packet(packet) => {
+            Message::Packet(packet, rssi, snr) => {
                 let _ = display.clear(Rgb565::BLACK);
-                let _ = draw_paquets(&mut display, &packet);
+                let _ = draw_paquets(&mut display, &packet, rssi, snr);
             }
 
         }
@@ -219,6 +215,9 @@ async fn radio_task (radio_kind: rusteesh::board::Radio) {
         println!("radio: prepare_for_rx failed: {:?}", err);
         return;
     }
+
+    let mut deque = MessageQueue::new();
+
     println!("radio: listening on 869.618 MHz — silence from here on is normal");
 
     loop {
@@ -228,7 +227,12 @@ async fn radio_task (radio_kind: rusteesh::board::Radio) {
                 // status.rssi, status.snr
                 println!("Received packet: len={}, rssi={}, snr={}", len, status.rssi, status.snr);
                 let payload = Vec::from_slice(&buffer[..len as usize]).unwrap();
-                PAQUETS.send(Message::Packet(payload)).await;
+                let message = Message::Packet(payload, status.rssi, status.snr);
+                PAQUETS.send(message).await;
+
+                deque.purger();
+                deque.enregistrer();
+                println!("Paquets per minute: {}/min", deque.par_minute());
             }
             Err(err) => {
                 // journaliser, mais surtout ne pas paniquer

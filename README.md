@@ -155,6 +155,8 @@ sources:
 | Preamble length | 32 symbols | `RadioLibWrappers.h:47` |
 | TX power | 14 dBm | `firebeetle_c6` variant |
 | TCXO (DIO3) | 1.8 V | `firebeetle_c6` variant |
+| Average Paquets Number | 2/min | At step 5.2, running during 35min, see 75 paquets |
+
 
 Three traps when reimplementing this:
 
