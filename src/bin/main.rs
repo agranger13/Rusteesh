@@ -167,7 +167,7 @@ async fn radio_task (radio_kind: rusteesh::board::Radio) {
     println!("radio: waking up…");
     let mut lora = match with_timeout(
         Duration::from_secs(2),
-        LoRa::new(radio_kind, false, embassy_time::Delay),
+        LoRa::new(radio_kind, false, embassy_time::Delay), // enable_public_network permet de changer le sync word
     )
     .await
     {

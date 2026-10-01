@@ -320,7 +320,7 @@ mod tests {
     fn draw_paquets_renders_binary_payloads() {
         // The very payload that made the UTF-8 path fail on the board.
         let mut d = FakeDrawTarget::new();
-        draw_paquets(&mut d, &[0x00, 0xFF, 0x9C, 0x12, 0x80]).unwrap();
+        draw_paquets(&mut d, &[0x00, 0xFF, 0x9C, 0x12, 0x80], 0, 0).unwrap();
         assert!(d.nb > 0);
     }
 
@@ -328,7 +328,7 @@ mod tests {
     fn draw_paquets_survives_an_empty_packet() {
         // Only the "len:0" header is drawn, and no row loop runs.
         let mut d = FakeDrawTarget::new();
-        assert!(draw_paquets(&mut d, &[]).is_ok());
+        assert!(draw_paquets(&mut d, &[], 0, 0).is_ok());
     }
 
     #[test]
@@ -336,10 +336,10 @@ mod tests {
         // A full 255-byte packet cannot fit on the panel: the function must clip
         // to MAX_ROWS rather than panic or run off the screen.
         let mut short = FakeDrawTarget::new();
-        draw_paquets(&mut short, &[0xAB; BYTES_PER_ROW * MAX_ROWS]).unwrap();
+        draw_paquets(&mut short, &[0xAB; BYTES_PER_ROW * MAX_ROWS], 0, 0).unwrap();
 
         let mut full = FakeDrawTarget::new();
-        draw_paquets(&mut full, &[0xAB; 255]).unwrap();
+        draw_paquets(&mut full, &[0xAB; 255], 0, 0).unwrap();
 
         // Same rows drawn; only the "len:" header differs in width.
         assert!(full.nb >= short.nb);
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn draw_paquets_shows_the_real_length_even_when_truncated() {
         let mut display = sim();
-        draw_paquets(&mut display, &[0xAB; 255]).unwrap();
+        draw_paquets(&mut display, &[0xAB; 255], 0, 0).unwrap();
 
         // The header sits on the y = 20 baseline.
         assert!(

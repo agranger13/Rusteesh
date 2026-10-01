@@ -1,3 +1,6 @@
+pub mod meshcore;
+
+#[cfg(feature = "hw")]
 pub mod messages;
-pub use messages::Message;
-pub use messages::MessageQueue;
+#[cfg(feature = "hw")]
+pub use messages::{Message, MessageQueue};
