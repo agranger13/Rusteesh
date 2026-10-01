@@ -1,4 +1,4 @@
-pub mod decoder;
 pub mod header;
-pub use decoder::decode_meshcore_packet;
+pub mod packet;
 pub use header::MeshcoreHeader;
+pub use packet::{DecoderError, Packet};

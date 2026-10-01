@@ -1,7 +1,6 @@
 
-#[derive(Debug)]
-pub enum HeaderError { 
-    Empty,
+#[derive(Debug, PartialEq)]
+pub enum HeaderError {
     UnknownPayloadType(u8),
 }
 
@@ -14,13 +13,15 @@ pub enum MeshcoreRouteType {
     TransportDirect = 0x03,
 }
 
-impl From<u8> for MeshcoreRouteType {
-    fn from(b: u8) -> Self {
+impl TryFrom<u8> for MeshcoreRouteType {
+    type Error = HeaderError;
+
+    fn try_from(b: u8) -> Result<Self, Self::Error> {
         match b & 0b11 { // on masque ici : il ne reste que 0..=3, le match est exhaustif
-            0x00 => Self::TransportFlood,
-            0x01 => Self::Flood,
-            0x02 => Self::Direct,
-            _    => Self::TransportDirect, // seule valeur restante : 3
+            0x00 => Ok(Self::TransportFlood),
+            0x01 => Ok(Self::Flood),
+            0x02 => Ok(Self::Direct),
+            _    => Err(HeaderError::UnknownPayloadType(b)), // seule valeur restante : 3
         }
     }
 }
@@ -75,18 +76,20 @@ pub enum MeshcorePayloadVersion {
     Ver4  = 0x03,
 }
 
-impl From<u8> for MeshcorePayloadVersion {
-    fn from(b: u8) -> Self {
-        match b & 0b11 { // on masque ici : il ne reste que 0..=3, le match est exhaustif
+impl TryFrom<u8> for MeshcorePayloadVersion {
+    type Error = HeaderError;
+
+    fn try_from(b: u8) -> Result<Self, Self::Error> {
+        Ok(match b & 0b11 { // on masque ici : il ne reste que 0..=3, le match est exhaustif
             0x00 => Self::Ver1,
             0x01 => Self::Ver2,
             0x02 => Self::Ver3,
             _    => Self::Ver4, // seule valeur restante : 3
-        }
+        })
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MeshcoreHeader {
     route_type: MeshcoreRouteType,
     payload_type: MeshcorePayloadType,
@@ -96,9 +99,9 @@ pub struct MeshcoreHeader {
 impl MeshcoreHeader {
     pub fn parse(b: u8) -> Result<Self, HeaderError> {
         Ok(Self {
-            route_type:      MeshcoreRouteType::from(b),                      // bits 0-1
+            route_type:      MeshcoreRouteType::try_from(b)?,                      // bits 0-1
             payload_type:    MeshcorePayloadType::try_from((b >> 2) & 0x0F)?, // bits 2-5
-            payload_version: MeshcorePayloadVersion::from(b >> 6),            // bits 6-7
+            payload_version: MeshcorePayloadVersion::try_from(b >> 6)?,            // bits 6-7
         })
     }
 
