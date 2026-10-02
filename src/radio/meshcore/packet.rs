@@ -1,5 +1,5 @@
 use heapless::Vec;
-
+use core::fmt;
 use super::header::{HeaderError, MeshcoreHeader, MeshcoreRouteType};
 
 #[derive(Debug, PartialEq)]
@@ -19,12 +19,23 @@ impl From<HeaderError> for DecoderError {
     }
 }
 
-#[derive(Debug)]
+impl fmt::Display for DecoderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecoderError::Empty => f.write_str("paquet vide"),
+            DecoderError::Header(e) => write!(f, "header invalide: {:?}", e),
+            DecoderError::Truncated => f.write_str("paquet tronqué"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Packet {
     header: MeshcoreHeader,
     path_length: u8,
     path: Vec<u8, 255>,
     payload: Vec<u8, 255>,
+    raw: Vec<u8, 255>,
 }
 
 impl Packet {
@@ -42,6 +53,10 @@ impl Packet {
 
     pub fn payload(&self) -> &[u8] {
         &self.payload
+    }
+
+    pub fn raw(&self) -> &[u8] {
+        &self.raw
     }
 }
 
@@ -74,7 +89,25 @@ impl TryFrom<&[u8]> for Packet {
             // Ne peut pas échouer : un morceau d'un Vec<u8, 255> tient dans 255 octets.
             path: Vec::from_slice(path).map_err(|_| DecoderError::Truncated)?,
             payload: Vec::from_slice(payload).map_err(|_| DecoderError::Truncated)?,
+            raw: Vec::from_slice(packet).map_err(|_| DecoderError::Truncated)?,
         })
+    }
+}
+
+
+impl fmt::Display for Packet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:?}/{:?} path=[",
+            self.header.route_type(),
+            self.header.payload_type(),
+        )?;
+        for (i, b) in self.path.iter().enumerate() {
+            if i > 0 { f.write_str(" ")?; }
+            write!(f, "{:02X}", b)?;
+        }
+        write!(f, "] payload={}o", self.payload.len())
     }
 }
 
@@ -124,5 +157,10 @@ mod tests {
     fn test_decode_bad_header() {
         let err = decode(&[0x0E << 2, 0x00]).unwrap_err();
         assert_eq!(err, DecoderError::Header(HeaderError::UnknownPayloadType(0x0E)));
+    }
+
+    #[test]
+    fn test_display() {
+        assert_eq!(decode(&[0x0E, 0x01, 0x02, 0x03]).unwrap().to_string(), "Direct/Ack path=[02] payload=1o");
     }
 }

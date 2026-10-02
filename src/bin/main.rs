@@ -32,9 +32,8 @@ use esp_hal::{
     gpio::{Input, Output}, time::{Instant},
 };
 
-use heapless::Vec;
 use lora_phy::{LoRa, RxMode, mod_params::{Bandwidth, CodingRate, SpreadingFactor}};
-use rusteesh::board::{Board, Display};
+use rusteesh::{board::{Board, Display}, radio::meshcore::packet};
 use rusteesh::input::{Debouncer, PressEvent};
 use rusteesh::ui::{draw_status, draw_paquets,refresh_background};
 use rusteesh::radio::messages::{MessageQueue, Message};
@@ -226,13 +225,27 @@ async fn radio_task (radio_kind: rusteesh::board::Radio) {
                 // buffer[..len] contient le paquet
                 // status.rssi, status.snr
                 println!("Received packet: len={}, rssi={}, snr={}", len, status.rssi, status.snr);
-                let payload = Vec::from_slice(&buffer[..len as usize]).unwrap();
-                let message = Message::Packet(payload, status.rssi, status.snr);
+                let packet = match packet::Packet::try_from(&buffer[..len as usize]) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        println!("Failed to decode packet: {}", e);
+                        continue;
+                    }
+                };
+                println!("Packet decoded: {}", packet);
+                println!("Raw Payload:");
+                for b in packet.raw() {
+                    esp_println::print!(" {:02X}", b);
+                }
+                println!();
+
+                let message = Message::Packet(packet, status.rssi, status.snr);
                 PAQUETS.send(message).await;
 
                 deque.purger();
                 deque.enregistrer();
                 println!("Paquets per minute: {}/min", deque.par_minute());
+                println!("---");
             }
             Err(err) => {
                 // journaliser, mais surtout ne pas paniquer

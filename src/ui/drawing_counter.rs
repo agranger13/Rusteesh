@@ -13,6 +13,8 @@ use embedded_graphics::{
     text::{Alignment, Text},
 };
 
+use crate::radio::meshcore::packet;
+
 
 /// Draws both counters, `A` to the left and `B` to the right of the centre
 /// line, formatted as `A:<n>`.
@@ -116,26 +118,26 @@ const MAX_ROWS: usize = 7;
 /// truncated display is still unambiguous.
 ///
 /// Erases nothing — like [`draw_status`], the caller clears the area first.
-pub fn draw_paquets<D>(display: &mut D, message: &[u8], rssi: i16, _snr: i16) -> Result<(), D::Error>
+pub fn draw_paquets<D>(display: &mut D, message: &packet::Packet, rssi: i16, _snr: i16) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
     let style_text = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
 
     // Write the header: "len:<n>"
-    let mut header: heapless::String<16> = heapless::String::new();
+    let mut header_s: heapless::String<128> = heapless::String::new();
     // `write!` into a heapless String can only fail on overflow, which the
     // fixed capacities here rule out. Swallowed rather than unwrapped so a
     // display glitch can never bring the firmware down.
-    let _ = write!(header, "len:{}", message.len());
-    let _ = Text::with_alignment(&header, Point::new(64, 20), style_text, Alignment::Center)
+    let _ = write!(header_s, "{}", message).ok();
+    let _ = Text::with_alignment(&header_s, Point::new(64, 20), style_text, Alignment::Center)
         .draw(display);
 
     // Draw a signal strength bar under the header to indicate reception quality.
     draw_signal_bar(display, rssi)?;
 
     // Write the payload in hexadecimal, 4 bytes per row, 7 rows max. Each row is 15 px high.
-    for (row, chunk) in message.chunks(BYTES_PER_ROW).take(MAX_ROWS).enumerate() {
+    for (row, chunk) in message.raw().chunks(BYTES_PER_ROW).take(MAX_ROWS).enumerate() {
         let mut line: heapless::String<16> = heapless::String::new();
         for b in chunk {
             let _ = write!(line, "{:02X} ", b);

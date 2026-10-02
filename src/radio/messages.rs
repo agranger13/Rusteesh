@@ -1,10 +1,11 @@
-use heapless::Vec;
 use heapless::Deque;
 use esp_hal::{time::{Instant, Duration}};
 
+use crate::radio::meshcore::packet;
+
 #[derive(Clone)]
 pub enum Message {
-    Packet(Vec<u8, 255>, i16, i16), // payload, rssi, snr
+    Packet(packet::Packet, i16, i16), // packet, rssi, snr
 }
 
 
