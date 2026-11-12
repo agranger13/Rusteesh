@@ -10,6 +10,8 @@ pub enum DecoderError {
     Header(HeaderError),
     /// Le paquet est plus court que ce qu'annoncent ses propres champs.
     Truncated,
+    /// Le paquet est trop long.
+    TooLong(u32),
 }
 
 // Permet à `?` de convertir automatiquement une HeaderError en DecoderError.
@@ -25,6 +27,7 @@ impl fmt::Display for DecoderError {
             DecoderError::Empty => f.write_str("paquet vide"),
             DecoderError::Header(e) => write!(f, "header invalide: {:?}", e),
             DecoderError::Truncated => f.write_str("paquet tronqué"),
+            DecoderError::TooLong(len) => write!(f, "paquet trop long: {} octets", len),
         }
     }
 }
@@ -64,6 +67,10 @@ impl TryFrom<&[u8]> for Packet {
     type Error = DecoderError;
 
     fn try_from(packet: &[u8]) -> Result<Self, Self::Error> {
+        if packet.len() > 255 {
+            return Err(DecoderError::TooLong(packet.len() as u32));
+        }
+
         let header_raw = *packet.first().ok_or(DecoderError::Empty)?;
         let header = MeshcoreHeader::parse(header_raw)?;
 
@@ -115,6 +122,9 @@ impl fmt::Display for Packet {
 mod tests {
     use super::*;
     use crate::radio::meshcore::header::*;
+    use rand::SeedableRng;
+    use rand::Rng;
+
 
     // Le paramètre typé `&[u8]` laisse un `&[u8; N]` se convertir tout seul en slice,
     // ce que `Packet::try_from(&[...])` ne ferait pas (inférence générique).
@@ -154,6 +164,33 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_maximum_size() {
+        let mut bytes = [0u8; 255];
+        bytes[0] = 0x3D; // header Flodd Custom Raw
+        let packet = decode(&bytes).unwrap();
+        assert_eq!(packet.payload().len(), 253);
+    }
+
+    #[test]
+    fn test_decode_too_long_packet() {
+        let mut bytes = [0u8; 256];
+        bytes[0] = 0x3D; // header Flodd Custom Raw
+        let err = decode(&bytes).unwrap_err();
+        assert_eq!(err, DecoderError::TooLong(256));
+    }
+
+    #[test]
+    fn test_decode_with_path_and_payload() {
+        let mut bytes = [0xFF; 255];
+        bytes[0] = 0x10; // header TransportFlood Advert Ver1
+        bytes[5] = 0x01; // path_length = 1 hash d'1 octet
+        bytes[6] = 0xAA; // path
+        let packet = decode(&bytes[..10]).unwrap();
+        assert_eq!(packet.path(), &[0xAA]);
+        assert_eq!(packet.payload(), &[0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
     fn test_decode_bad_header() {
         let err = decode(&[0x0E << 2, 0x00]).unwrap_err();
         assert_eq!(err, DecoderError::Header(HeaderError::UnknownPayloadType(0x0E)));
@@ -162,5 +199,17 @@ mod tests {
     #[test]
     fn test_display() {
         assert_eq!(decode(&[0x0E, 0x01, 0x02, 0x03]).unwrap().to_string(), "Direct/Ack path=[02] payload=1o");
+    }
+
+    #[test]
+    fn test_decode_no_panic(){
+        let seed = 12345;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        for _ in 0..100_000 {
+            let len = rng.next_u32() as usize % 300;
+            let mut bytes = vec![0u8; len];
+            rng.fill_bytes(&mut bytes);
+            let _ = Packet::try_from(&bytes);
+        }
     }
 }

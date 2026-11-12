@@ -13,7 +13,7 @@ use embedded_graphics::{
     text::{Alignment, Text},
 };
 
-use crate::radio::meshcore::packet;
+use crate::radio::meshcore::Packet;
 
 
 /// Draws both counters, `A` to the left and `B` to the right of the centre
@@ -118,7 +118,7 @@ const MAX_ROWS: usize = 7;
 /// truncated display is still unambiguous.
 ///
 /// Erases nothing — like [`draw_status`], the caller clears the area first.
-pub fn draw_paquets<D>(display: &mut D, message: &packet::Packet, rssi: i16, _snr: i16) -> Result<(), D::Error>
+pub fn draw_paquets<D>(display: &mut D, message: &Packet, rssi: i16, _snr: i16) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
@@ -318,19 +318,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn draw_paquets_renders_binary_payloads() {
-        // The very payload that made the UTF-8 path fail on the board.
-        let mut d = FakeDrawTarget::new();
-        draw_paquets(&mut d, &[0x00, 0xFF, 0x9C, 0x12, 0x80], 0, 0).unwrap();
-        assert!(d.nb > 0);
-    }
-
-    #[test]
-    fn draw_paquets_survives_an_empty_packet() {
-        // Only the "len:0" header is drawn, and no row loop runs.
-        let mut d = FakeDrawTarget::new();
-        assert!(draw_paquets(&mut d, &[], 0, 0).is_ok());
+    /// A valid packet of `len` bytes (2..=255): header 0x0E (Direct/Ack),
+    /// path_length 0x00 (no path), then 0xAB filler as payload.
+    ///
+    /// Raw `[0xAB; N]` is not a valid packet: 0xAB announces a TransportDirect
+    /// route with a 129-byte path, so short buffers fail with `Truncated`.
+    fn filled(len: usize) -> Packet {
+        let mut bytes = [0xAB; 255];
+        bytes[0] = 0x0E;
+        bytes[1] = 0x00;
+        Packet::try_from(&bytes[..len]).expect("test bytes must be a valid MeshCore packet")
     }
 
     #[test]
@@ -338,24 +335,24 @@ mod tests {
         // A full 255-byte packet cannot fit on the panel: the function must clip
         // to MAX_ROWS rather than panic or run off the screen.
         let mut short = FakeDrawTarget::new();
-        draw_paquets(&mut short, &[0xAB; BYTES_PER_ROW * MAX_ROWS], 0, 0).unwrap();
+        draw_paquets(&mut short, &filled(BYTES_PER_ROW * MAX_ROWS), 0, 0).unwrap();
 
         let mut full = FakeDrawTarget::new();
-        draw_paquets(&mut full, &[0xAB; 255], 0, 0).unwrap();
+        draw_paquets(&mut full, &filled(255), 0, 0).unwrap();
 
-        // Same rows drawn; only the "len:" header differs in width.
+        // Same rows drawn; only the summary header ("payload=…o") differs.
         assert!(full.nb >= short.nb);
     }
 
     #[test]
-    fn draw_paquets_shows_the_real_length_even_when_truncated() {
+    fn draw_paquets_shows_the_header_even_when_truncated() {
         let mut display = sim();
-        draw_paquets(&mut display, &[0xAB; 255], 0, 0).unwrap();
+        draw_paquets(&mut display, &filled(255), 0, 0).unwrap();
 
         // The header sits on the y = 20 baseline.
         assert!(
             any_pixel(&display, 0..W as i32, 6..22, Rgb565::WHITE),
-            "the length header should be drawn"
+            "the packet summary header should be drawn"
         );
         // Nothing may spill past the last row (baseline 40 + 6*15 = 130).
         assert!(

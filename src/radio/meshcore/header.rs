@@ -2,6 +2,8 @@
 #[derive(Debug, PartialEq)]
 pub enum HeaderError {
     UnknownPayloadType(u8),
+    UnknownPayloadVersion(u8),
+    UnknownRouteType(u8),
 }
 
 #[repr(u8)] // garantit que la variante tient sur un u8, et permet `as u8`
@@ -21,7 +23,8 @@ impl TryFrom<u8> for MeshcoreRouteType {
             0x00 => Ok(Self::TransportFlood),
             0x01 => Ok(Self::Flood),
             0x02 => Ok(Self::Direct),
-            _    => Err(HeaderError::UnknownPayloadType(b)), // seule valeur restante : 3
+            0x03 => Ok(Self::TransportDirect),
+            _    => Err(HeaderError::UnknownRouteType(b))
         }
     }
 }
@@ -84,7 +87,8 @@ impl TryFrom<u8> for MeshcorePayloadVersion {
             0x00 => Self::Ver1,
             0x01 => Self::Ver2,
             0x02 => Self::Ver3,
-            _    => Self::Ver4, // seule valeur restante : 3
+            0x03 => Self::Ver4, // seule valeur restante : 3
+            _   => return Err(HeaderError::UnknownPayloadVersion(b)),
         })
     }
 }
@@ -100,7 +104,7 @@ impl MeshcoreHeader {
     pub fn parse(b: u8) -> Result<Self, HeaderError> {
         Ok(Self {
             route_type:      MeshcoreRouteType::try_from(b)?,                      // bits 0-1
-            payload_type:    MeshcorePayloadType::try_from((b >> 2) & 0x0F)?, // bits 2-5
+            payload_type:    MeshcorePayloadType::try_from((b >> 2) & 0x0F)?,      // bits 2-5
             payload_version: MeshcorePayloadVersion::try_from(b >> 6)?,            // bits 6-7
         })
     }
@@ -136,6 +140,13 @@ mod tests {
         assert_eq!(header.route_type, MeshcoreRouteType::TransportFlood);
         assert_eq!(header.payload_type, MeshcorePayloadType::Req);
         assert_eq!(header.payload_version, MeshcorePayloadVersion::Ver1);
+    }
+
+    #[test]
+    fn test_header_parsing_transport_direct() {
+        // Route 3 = TransportDirect : valeur valide, longtemps rejetée par erreur.
+        let header = MeshcoreHeader::parse(0x03).unwrap();
+        assert_eq!(header.route_type, MeshcoreRouteType::TransportDirect);
     }
 
     #[test]
